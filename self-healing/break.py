@@ -53,9 +53,13 @@ def main():
 
     bug = BUGS[args.bug]
     source = CALC_FILE.read_text()
-    if source.count(bug["correct"]) != 1:
-        print("calc.py is already broken or not in its expected state — restore it first, then break it.")
-        return 1
+    # Refuse if ANY function is already broken, not just the one about
+    # to be broken — stacking a second bug on a broken file leaves two
+    # failures at once, so check the whole file is healthy first.
+    for name, known in BUGS.items():
+        if source.count(known["correct"]) != 1:
+            print(f"calc.py is already broken ({name} is not in its correct state) — restore it first, then break it.")
+            return 1
     CALC_FILE.write_text(source.replace(bug["correct"], bug["broken"]))
     # Drop any cached bytecode for calc.py, so the next test run
     # compiles the broken file instead of reusing a stale .pyc: a

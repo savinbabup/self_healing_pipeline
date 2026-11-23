@@ -6,7 +6,7 @@ A small calculator app with a pipeline that fixes its own test failures.
 
 - `calc.py` — five calculator functions: power, add, subtract, multiply, divide.
 - `test_calc.py` — tests for every function (not just power).
-- `healer.py` — the doctor. When the tests fail, it works out which of five known bugs caused it, fixes `calc.py`, and checks the tests pass again.
+- `healer.py` — the doctor. When the tests fail, it works out which of five known bugs caused it, fixes `calc.py`, and checks the tests pass again. If several bugs are stacked in the file at once, it fixes them one at a time until the tests pass.
 - `break.py` — breaks `calc.py` on purpose, so you can watch the pipeline heal it.
 - `.github/workflows/self-healing-ci.yml` — runs the tests on every push and pull request.
 - `.github/workflows/self-heal.yml` — runs when the tests fail. It runs the healer, opens a pull request with the fix, waits for the tests to pass, and merges it.
@@ -54,6 +54,7 @@ python -m pytest test_calc.py -v        # green again
 ## Honest limits
 
 - The healer only knows the five bugs in the table. Anything else — a syntax error, a bug it has never seen, a broken test file — and it stops, prints `I can't diagnose this - needs a human`, and changes nothing.
+- `break.py` refuses to break a file that is already broken, so bugs don't stack up by accident — heal or restore the file first, then break it again.
 - It never heals its own fix: if the tests fail on a `self-heal/*` branch, it posts a comment on the pull request saying the fix didn't hold and asks a human to look.
 - It attempts one heal per failed run. No infinite loops.
 - The fix is only merged after CI passes on the pull request. If the checks fail, the pull request stays open for a human.

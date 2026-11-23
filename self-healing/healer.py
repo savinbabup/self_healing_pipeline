@@ -6,13 +6,15 @@ Run it after the tests fail:
     python healer.py
 
 It runs the pytest suite itself, reads the failures, and fixes only the
-five failure patterns it knows. If the failure is anything else — a
-syntax error, a bug it has never seen, a broken test file — it prints
+five failure patterns it knows. If several bugs are stacked in the file
+at once, it fixes them one per round and keeps going until the tests
+pass (up to five rounds). If the failure is anything else — a syntax
+error, a bug it has never seen, a broken test file — it prints
 "I can't diagnose this - needs a human", changes nothing, and exits
 non-zero.
 
-Exit code 0 means a fix was applied and the tests pass afterwards.
-Anything else means no fix was applied.
+Exit code 0 means fixes were applied and the tests pass afterwards.
+Anything else means the file is not fully healed.
 """
 
 import re
@@ -105,46 +107,60 @@ def cant_diagnose():
     return 1
 
 
+MAX_ROUNDS = 5
+
+
 def main():
-    code, output = run_pytest()
+    diagnoses = []
+    fixes = []
+    for _ in range(MAX_ROUNDS):
+        code, output = run_pytest()
 
-    if code == 0:
-        print("All tests pass — nothing to heal.")
-        return 1
+        if code == 0:
+            if diagnoses:
+                print(f"Healed {len(diagnoses)} problem(s) — tests pass now.")
+                return 0
+            print("All tests pass — nothing to heal.")
+            return 1
 
-    if "SyntaxError" in output or "ERROR collecting" in output:
-        print("The test run broke before any test could run (a syntax or collection error).")
-        return cant_diagnose()
+        if "SyntaxError" in output or "ERROR collecting" in output:
+            print("The test run broke before any test could run (a syntax or collection error).")
+            return cant_diagnose()
 
-    failed = failed_tests(output)
-    source = CALC_FILE.read_text()
+        failed = failed_tests(output)
+        source = CALC_FILE.read_text()
 
-    for pattern in PATTERNS:
-        if pattern["failed_test"] not in failed:
-            continue
-        if pattern["output_must_contain"] not in output:
-            continue
-        if pattern["broken"] not in source:
-            continue
-        if source.count(pattern["broken"]) != 1:
-            continue
-        # All checks agree: apply the exact fix.
-        CALC_FILE.write_text(source.replace(pattern["broken"], pattern["fixed"]))
-        # Drop cached bytecode so the verification run below compiles
-        # the fixed file (same one-character/size trap as in break.py).
+        matched = None
+        for pattern in PATTERNS:
+            if pattern["failed_test"] not in failed:
+                continue
+            if pattern["output_must_contain"] not in output:
+                continue
+            if pattern["broken"] not in source:
+                continue
+            if source.count(pattern["broken"]) != 1:
+                continue
+            matched = pattern
+            break
+
+        if matched is None:
+            return cant_diagnose()
+
+        # All checks agree: apply the exact fix, then loop and
+        # re-test — another stacked bug may still be in the file.
+        CALC_FILE.write_text(source.replace(matched["broken"], matched["fixed"]))
+        # Drop cached bytecode so the next test run compiles the fixed
+        # file (same one-character/size trap as in break.py).
         shutil.rmtree(BASE_DIR / "__pycache__", ignore_errors=True)
-        DIAGNOSIS_FILE.write_text(pattern["diagnosis"] + "\n")
-        FIX_FILE.write_text(pattern["fix"] + "\n")
-        print(f"Diagnosis: {pattern['diagnosis']}.")
-        print(f"Fix: {pattern['fix']}.")
-        code_after, _ = run_pytest()
-        if code_after == 0:
-            print("Tests pass after the fix.")
-            return 0
-        print("The fix was applied but the tests still fail — needs a human.")
-        return 1
+        diagnoses.append(matched["diagnosis"])
+        fixes.append(matched["fix"])
+        DIAGNOSIS_FILE.write_text("; ".join(diagnoses) + "\n")
+        FIX_FILE.write_text("; ".join(fixes) + "\n")
+        print(f"Diagnosis: {matched['diagnosis']}.")
+        print(f"Fix: {matched['fix']}.")
 
-    return cant_diagnose()
+    print("Applied fixes but the tests still fail — needs a human.")
+    return 1
 
 
 if __name__ == "__main__":
