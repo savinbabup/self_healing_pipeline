@@ -1,0 +1,103 @@
+name: Self-Heal
+
+on:
+  workflow_run:
+    workflows: ["Self-Healing CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  # actions: write is needed for the `gh workflow run` step below, which
+  # triggers CI on the fix branch (see the comment there).
+  actions: write
+
+jobs:
+  heal:
+    # Only heal real failures on normal branches. Never heal a branch
+    # that is itself a healing attempt — that means the fix didn't hold.
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && !startsWith(github.event.workflow_run.head_branch, 'self-heal/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the failing commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r self-healing/requirements.txt
+
+      - name: Run the healer
+        id: heal
+        run: python self-healing/healer.py
+
+      - name: Create fix branch and push
+        if: steps.heal.outcome == 'success'
+        run: |
+          git config user.name "self-heal-bot"
+          git config user.email "self-heal-bot@users.noreply.github.com"
+          git checkout -b self-heal/${{ github.run_id }}
+          git add self-healing/calc.py
+          git commit -m "Self-heal: $(cat self-healing/diagnosis.txt)"
+          git push origin self-heal/${{ github.run_id }}
+
+      - name: Open PR, run CI on it, and merge when green
+        if: steps.heal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          DIAGNOSIS=$(cat self-healing/diagnosis.txt)
+          FIX=$(cat self-healing/fix.txt)
+          PR_URL=$(gh pr create \
+            --title "Self-heal: $DIAGNOSIS" \
+            --body "This PR was opened automatically by the self-healing pipeline.
+
+          Diagnosis: $DIAGNOSIS.
+          Fix: $FIX.
+
+          The fix was applied by self-healing/healer.py and the tests pass locally. This PR merges itself once CI is green." \
+            --base "${{ github.event.workflow_run.head_branch }}" \
+            --head "self-heal/${{ github.run_id }}")
+          PR_NUMBER=${PR_URL##*/}
+          echo "Opened $PR_URL"
+          # Runs started by GITHUB_TOKEN do not trigger other workflows,
+          # so trigger CI on the fix branch explicitly.
+          gh workflow run self-healing-ci.yml --ref "self-heal/${{ github.run_id }}"
+          # Wait for the checks to appear on the PR (up to 2 minutes),
+          # then wait for them to finish.
+          for i in $(seq 1 12); do
+            COUNT=$(gh pr checks "$PR_NUMBER" --json name --jq 'length' 2>/dev/null || echo 0)
+            if [ "$COUNT" -gt 0 ]; then
+              break
+            fi
+            sleep 10
+          done
+          if gh pr checks "$PR_NUMBER" --watch --interval 10; then
+            gh pr merge "$PR_NUMBER" --merge --delete-branch
+            echo "Merged $PR_URL"
+          else
+            echo "Checks did not pass — leaving $PR_URL open for a human."
+            exit 1
+          fi
+
+  fix-did-not-hold:
+    # The CI run that failed was itself on a self-heal/* branch: the
+    # automatic fix didn't hold. Say so on the PR and stop.
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && startsWith(github.event.workflow_run.head_branch, 'self-heal/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on the healing PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          PR_NUMBER=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number --jq '.[0].number')
+          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+            gh pr comment "$PR_NUMBER" --body "The self-heal fix didn't hold — the tests still fail on this branch. A human needs to take a look."
+          fi

@@ -1,0 +1,31 @@
+name: Self-Healing CI
+
+on:
+  push:
+    paths:
+      - 'self-healing/**'
+  pull_request:
+    paths:
+      - 'self-healing/**'
+  # Needed by the Self-Heal workflow: runs started by the built-in
+  # GITHUB_TOKEN do not trigger push/pull_request workflows, so Self-Heal
+  # triggers CI on the fix branch explicitly with workflow_dispatch.
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r self-healing/requirements.txt
+
+      - name: Run tests
+        run: python -m pytest self-healing/test_calc.py -v
