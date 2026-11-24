@@ -4,26 +4,21 @@ These are the functions the pipeline tests. The healer (healer.py)
 knows how to fix five specific ways these functions can be broken.
 """
 
-
 def power(a, b):
     """Return a raised to the power of b."""
-    return a ** b
-
+    return a ^ b
 
 def add(a, b):
     """Return a + b."""
     return a + b
 
-
 def subtract(a, b):
     """Return a - b."""
     return a - b
 
-
 def multiply(a, b):
     """Return a * b."""
     return a * b
-
 
 def divide(a, b):
     """Return a / b."""
