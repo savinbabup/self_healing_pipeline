@@ -69,16 +69,23 @@ jobs:
           # Runs started by GITHUB_TOKEN do not trigger other workflows,
           # so trigger CI on the fix branch explicitly.
           gh workflow run self-healing-ci.yml --ref "self-heal/${{ github.run_id }}"
-          # Wait for the checks to appear on the PR (up to 2 minutes),
-          # then wait for them to finish.
+          # Watch the run we just started, not the PR's checks: the PR
+          # was opened by a bot, so GitHub holds its automatic test run
+          # for a maintainer's approval and the PR checks never go
+          # green on their own. The run we dispatched needs no approval.
+          RUN_ID=""
           for i in $(seq 1 12); do
-            COUNT=$(gh pr checks "$PR_NUMBER" --json name --jq 'length' 2>/dev/null || echo 0)
-            if [ "$COUNT" -gt 0 ]; then
+            RUN_ID=$(gh run list --workflow self-healing-ci.yml --branch "self-heal/${{ github.run_id }}" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
               break
             fi
             sleep 10
           done
-          if gh pr checks "$PR_NUMBER" --watch --interval 10; then
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "Could not find the CI run on the fix branch — leaving $PR_URL open for a human."
+            exit 1
+          fi
+          if gh run watch "$RUN_ID" --exit-status --interval 10; then
             gh pr merge "$PR_NUMBER" --merge --delete-branch
             echo "Merged $PR_URL"
           else
